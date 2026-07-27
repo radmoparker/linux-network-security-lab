@@ -154,6 +154,20 @@ Aussi, les logs sont positionnés sur une chaine simple (indépendante, qui est 
 Annexe 4 : nftables.conf
 
 **Suricata en IDS**
+Suricata est mis en place sur notre parefeu Debian, afin de détecter les attaques et tentatives d'intrusions de manière plus approfondies (détection par signatures et/ou anomalies, ).
+
+Suricata est configuré ainsi : 
+* Réseaux interne  = 172.16.44.0/24, 192.168.89.0/24
+* Réseaux externe = NON Réseaux interne
+* Interface d'écoute = Vmnet2 (enp2s0 du point de vue de la machine)
+* On ajoute comme source de règle d'analyse "et/open" (Emerging Threats Open), la source de référence
+* Les logs seront donc visibles depuis les fichiers :
+    - /var/log/suricata/fast.log
+    - /var/log/suricata/eve.json
+
+
+Note : On manipulera le fichier de log "eve.json" avec la commande "jq" (Json Query)
+
 
 **SIEM Wazuh**
 
