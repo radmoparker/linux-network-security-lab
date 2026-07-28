@@ -1,0 +1,109 @@
+<!-- Local rules -->
+
+<!-- Modify it at your will. -->
+<!-- Copyright (C) 2015, Wazuh Inc. -->
+
+<!-- Example -->
+<group name="local,syslog,sshd,">
+
+  <!--
+  Dec 10 01:02:02 host sshd[1234]: Failed none for root from 1.1.1.1 port 1066 ssh2
+  -->
+  <rule id="100001" level="5">
+    <if_sid>5716</if_sid>
+    <srcip>1.1.1.1</srcip>
+    <description>sshd: authentication failed from IP 1.1.1.1.</description>
+    <group>authentication_failed,pci_dss_10.2.4,pci_dss_10.2.5,</group>
+  </rule>
+
+</group>
+<group name="firewall-debian,nftables,">
+  <rule id="100051" level="7">
+    <match>CT-ERR_FROM-EXTERNAL_ICMP-REP_</match>
+    <description>Failed ICMP connection tracking validationfrom external host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100052" level="7">
+    <match>CT-ERR_FROM-EXTERNAL_HTTP-REP_</match>
+    <description>Failed HTTP connection tracking validation from external host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100053" level="7">
+    <match>CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_</match>
+    <description>Failed HTTP connexion tracking validation from DMZ to Admin host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100054" level="7">
+    <match>CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_</match>
+    <description>Failed ICMP connexion tracking validation from DMZ to Admin host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100055" level="10">
+    <match>CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_</match>
+    <description>Failed SSH connexion tracking validation from DMZ to Admin host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100056" level="6">
+    <match>DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_</match>
+    <description>Http connection attempt from external to admin host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100057" level="10">
+    <match>DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_</match>
+    <description>SSH connection attempt from external to admin host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100058" level="6">
+    <match>DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_</match>
+    <description>ICMP echo-request attempt from external to admin host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100059" level="8">
+    <match>DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_</match>
+    <description>SSH connection attempt from external to DMZ network host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100060" level="5">
+    <match>DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_</match>
+    <description>ICMP echo-request attempt from external to DMZ network host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100061" level="6">
+    <match>DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_</match>
+    <description>Http connection attempt from DMZ network to admin host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100062" level="10">
+    <match>DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_</match>
+    <description>SSH connection attempt from DMZ network to admin host</description>
+  </rule>
+</group>
+
+<group name="firewall-debian,nftables,">
+  <rule id="100063" level="6">
+    <match>DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_</match>
+    <description>ICMP echo-request attempt from DMZ network to admin host</description>
+  </rule>
+</group>

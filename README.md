@@ -3,19 +3,23 @@
 
 ## 1. Présentation
 **Objectif du laboratoire**
-La mise en place d'un laboratoire virtuel est essentiel pour prendre en main la plupart des outils de sécurité informatique.
+La mise en place d'un laboratoire virtuel est essentielle pour prendre en main la plupart des outils de sécurité informatique.
 
-Ce laboratoire a été conçu afin de mettre en place une architecture réseau sécurisée intégrant un pare-feu Linux, un IDS réseau et une solution SIEM. Il permet de simuler différents scénarios d'attaque et d'observer leur détection dans un environnement virtualisé.
+Ce laboratoire a été conçu afin de mettre en place une architecture réseau sécurisée intégrant un pare-feu Linux, un IDS réseau et une solution SIEM. Il permetra de simuler différents scénarios d'attaque et d'observer leur détection dans un environnement virtualisé.
 
 
 Note : Ce Lab est également un moyen d'apréhender un parefeu plus technique que pfsense (pratiqué lors de projets universitaire)
 
 **Machine et outil de virtualisation**
-La machine dans laquelle est implémenté ce lab est un Macbookpro 2023 (apple silicon M2 Pro 16GB RAM). On est donc sur un processeur en AMRM64.
+Configuration de la machine dans laquelle est implémenté ce lab :  
+- Processeur apple silicon M2 Pro (processeur en AMRM64) 
+- 16GB RAM
+- 512 GB SSD
 
 L'outil de virtualisation choisi est VMware Fusion pour plusieur raisons :
 - Disponible sur MacOS
-- Permet d'atttacher plusieurs interfaces réseau à une V, ce qui est essentiel pour ce Lab.
+- Gratuit (du moins pour les fonctionalités nécessaire à ce Lab)
+- Permet d'attacher plusieurs interfaces réseau à une VM (ce n'est pas le cas d'UTM par exemple).
 
 **Technologies utilisées**
 - Nftable : pour manipuler le parefeu Netfilter (parefeu linux)
@@ -24,6 +28,7 @@ L'outil de virtualisation choisi est VMware Fusion pour plusieur raisons :
 - Wazuh : Générer des alertes à partir de Suricata ainsi que des logs du parefeu collectés par rsyslog
 - Scapy : Pour générer pour générer des paquets identifié par le parefeu comme risqués (notament sur le connexion tracking)
 - Nmap : Pour Tester l'IDS suricata
+- jq : pour manipuler le fichier Json généré par suricata
 
 - Kali Linux : Machine utilisé pour tester les tentatives d'intrusions ou de cartographie.
 - Linux Desktop / Server : L'un pour l'administration et la supervision, l'autre pour le service Web (minimale)
@@ -73,7 +78,7 @@ Annexe 3 : Création et assignations des interfaces sur Vmare
 - 192.168.231.0/24 via 192.168.89.1 (vmnet 3)
 - 172.16.44.0/24 via 192.168.89.1 (vmnet 3)
 
-## Déploiement du pare-feu
+## 5. Déploiement du pare-feu
 **Politique de sécurité**
 La politique de sécurité a pour but de garantir la disponibilité des services, l'isolation des différentes zones, et l'accès à l'ensemble de notre réseaux interne à la machine admin.
 
@@ -153,7 +158,7 @@ Aussi, les logs sont positionnés sur une chaine simple (indépendante, qui est 
 
 Annexe 4 : nftables.conf
 
-**Suricata en IDS**
+## 5. Suricata en IDS
 Suricata est mis en place sur notre parefeu Debian, afin de détecter les attaques et tentatives d'intrusions de manière plus approfondies (détection par signatures et/ou anomalies, ).
 
 Suricata est configuré ainsi : 
@@ -169,9 +174,58 @@ Suricata est configuré ainsi :
 Note : On manipulera le fichier de log "eve.json" avec la commande "jq" (Json Query)
 
 
-**SIEM Wazuh**
+## 6. SIEM Wazuh
+**Installation**
+Wazuh est installé en single node (tous les services au même endroit) dans la machine Admin. On installera donc les 3 services : 
+* Wazuh Manager : Le serveur Wazuh pour capter les logs et alertes
+* Wazuh Indexer : La base de données Wazuh
+* Wazuh Dashboard : L'interface Web de supervision
 
-**Test et validation**
+Un seul agent sera installé sur le parefeu (debian) : 
+* Wazuh agent qui transmettra à Wazuh Manager : 
+    - Les logs kernel collectés avec rsyslog (dont les logs générés avec le pare-feu)
+    - Les alertes suricata
+
+Annexe : Ajouts des paramètres à la configuration de l'agent pour récupérer logs rsyslog et alertes suricata
+
+**Configuration pour archiver les logs reçu**
+Les évènements reçu ne sont pas sauvegardé par défaut par Wazuh Manager (Wazuh server), si ceux ci ne génèrent pas une alerte.
+Note : on avait pas besoin de faire cela avec suricata, car les évènements suricata sont des alertes et son donc sauvegardés dans /var/ossec/logs/alerts/alerts.json
+
+Pour l'archivage, nous avons donc :
+- Activé logall_json (configuration du fichier /var/ossec/etc/ossec.conf) pour sauvegarder toutes les évènements dans /var/ossec/logs/alerts/archives.json, même ceux ne générant pas d'alertes
+- Préciser au collecteur des sorties de Wazuh Manager, "filebeat", d'envoyer à Wazuh Indexer les archives (configuration du fichier /etc/filebeat/filebeat.yml)
+- Crée un index pour l'archivage dans Wazuh Dashboard pour observer les logs depuis l'interface Web
+
+Ainsi, on a un visuel brut des logs directement depuis l'interface Web, ce qui facilitera la création d'alertes.
+
+**Création d'alertes personalisées**
+Les logs reçu depuis le firewall (notamment collectés par rsyslog et envoyé par l'agent) ne génèrent pas d'alertes.
+On a donc générer nos propres règles de déclanchement d'alertes en se basant sur les préfixes crées par les règles du parefeu concernant les logs (configuration du fichier /var/ossec/etc/rules/local_rules.xml).
+
+Si un des préfixe est reconnu, une alerte est générée parz Wazuh.
+
+On associera un niveau d'alerte (en suivant plus ou moins la documentation Wazuh à ce sujet)
+
+| Evènement                             | Niveau       |
+| ------------------------------------- | -----------: |
+| CT-ERR_FROM-EXTERNAL_ICMP-REP_        |        **7** |
+| CT-ERR_FROM-EXTERNAL_HTTP-REP_        |        **7** |
+| CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_    |        **7** |
+| CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_    |        **7** |
+| CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_     |        **10**|
+| DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_ |        **6** |
+| DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_  |       **10** |
+| DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_ |        **6** |
+| DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_    |        **8** |
+| DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_   |        **5** |
+| DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_      |        **6** |
+| DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_       |       **10** |
+| DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_      |        **6** |
+
+Annexe : custom_rules.xml
+
+## 7. Test et validation
 
 
 
