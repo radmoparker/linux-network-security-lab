@@ -1,277 +1,620 @@
 # linux-network-security-lab
 ## Lab SOC - Firewall Debian (nftable), Suricata et Wzuh
 
-## 1. Présentation
-**Objectif du laboratoire**
-La mise en place d'un laboratoire virtuel est essentielle pour prendre en main la plupart des outils de sécurité informatique.
-
-Ce laboratoire a été conçu afin de mettre en place une architecture réseau sécurisée intégrant un pare-feu Linux, un IDS réseau et une solution SIEM. Il permetra de simuler différents scénarios d'attaque et d'observer leur détection dans un environnement virtualisé.
-
-
-Note : Ce Lab est également un moyen d'apréhender un parefeu plus technique que pfsense (pratiqué lors de projets universitaire)
-
-**Machine et outil de virtualisation**
-Configuration de la machine dans laquelle est implémenté ce lab :  
-- Processeur apple silicon M2 Pro (processeur en AMRM64) 
-- 16GB RAM
-- 512 GB SSD
-
-L'outil de virtualisation choisi est VMware Fusion pour plusieur raisons :
-- Disponible sur MacOS
-- Gratuit (du moins pour les fonctionalités nécessaire à ce Lab)
-- Permet d'attacher plusieurs interfaces réseau à une VM (ce n'est pas le cas d'UTM par exemple).
-
-**Technologies utilisées**
-- Nftable : pour manipuler le parefeu Netfilter (parefeu linux)
-- rsyslog : permet de ollecter les journeaux générés par le parefeu
-- Suricata : Utilisé en IDS sur l'interface Wan du parefeu afin d'identifier les tentatives d'intrusions
-- Wazuh : Générer des alertes à partir de Suricata ainsi que des logs du parefeu collectés par rsyslog
-- Scapy : Pour générer pour générer des paquets identifié par le parefeu comme risqués (notament sur le connexion tracking)
-- Nmap : Pour Tester l'IDS suricata
-- jq : pour manipuler le fichier Json généré par suricata
-
-- Kali Linux : Machine utilisé pour tester les tentatives d'intrusions ou de cartographie.
-- Linux Desktop / Server : L'un pour l'administration et la supervision, l'autre pour le service Web (minimale)
-
-**Compétences mises en œuvre**
-- Mise en place d'une politique de filtrage (politique de sécurité réseau)
-- Mise en place du NAT (SNAT et DNAT)
-- Routage et Ip statiques
-- Mise en place de règles et d'alertes autour du "connexion tracking"
-
-
-## 2. Architecture
-**Schéma réseau**
-Annexe 1
-**Description des machines**
-- Kali : Machine exterieur dédiée aux attaques, c'est avec elle qu'on va tester notre architectures (accès ou non accès aux services, tentatives d'intrusions, scan de ports)
-- Debian : C'est cette machine qui va intégrer les fonctions de routage et de parefeu avec nftable. Elle va également générer des logs, intégrer Suricata en IDS et faire tourner un Agent Wazuh.
-- Ubunut Desktop : C'est la machine admin qui va intégrer Wazuh (en single node) et établir des connexions SSH avec l'interieur de notre réseaux
-- Ubuntu Serveur : Service Web simple et accessible depuis l'exterieur.
-
-**Flux Réseaux**
-Annexe 2 : Flux de communication Réseaux
-
-## 3. Schéma réseau et configuration Vmare
-**Création des différentes interfaces**
-- vmnet 2 : 192.168.231.0/24
-- vmnet 3 : 192.168.89.0/24
-- vmnet 4 : 172.16.44.0/24
-
-**Assignation des interfaces aux machines et IPs statiques**
-- Kali : vmnet 2 -> 192.168.231.100
-- Debian : vmnet 2 -> 192.168.231.1, vmnet 3 -> 192.168.89.1, vmnet 4 -> 172.16.44.1
-- Admin : vmnet 4 -> 172.16.44.2
-- Server : vmnet 3 -> 192.168.89.2
-
-Annexe 3 : Création et assignations des interfaces sur Vmare
-
-## 4. Routage
-**Routage Pare-feu Debian (Routagee par défaut car chaque réseaux est lié à une interface)**
-- 192.168.231.0/24 via vmnet 2 (enp2s0 du point de vue de la machine) 
-- 192.168.89.0/24 via vmnet 3 (enp26s0 du point de vue de la machine) 
-- 172.168.231.0/24 via vmnet 4 (enp3s0 du point de vue de la machine) 
-**Routage admin**
-- 192.168.231.0/24 via 172.16.44.1 (vmnet 4)
-- 192.168.89.0/24 via 172.16.44.1 (vmnet 4)
-**Routage serveur**
-- 192.168.231.0/24 via 192.168.89.1 (vmnet 3)
-- 172.16.44.0/24 via 192.168.89.1 (vmnet 3)
-
-## 5. Déploiement du pare-feu
-**Politique de sécurité**
-La politique de sécurité a pour but de garantir la disponibilité des services, l'isolation des différentes zones, et l'accès à l'ensemble de notre réseaux interne à la machine admin.
-
-Notre politique de filtrage consisidère que :
-* Le routeur doit pouvoir  ping partout (même à l'extérieur)
-* Le routeur doit pouvoir accéder au service Web de l’exterieur mais pas l’inverse
-* Le routeur doit pouvoir accéder au service Web de notre serveur interne mais pas l’inverse
-
-* L’exterieur doit pouvoir accéder au service http de notre serveur interne  
-* Les zones admin et serveur doivent pouvoir ping l’extérieur mais pas l'inverse
-* Les zones admin et serveur doivent pouvoir accéder aux services web (port 80) à l'extérieur 
-* La machine admin doit pouvoir accéder en SSH au pare-feu (debian) et au serveur interne, mais pas l'inverse
-
-**NAT**
-* DNAT : Les machines à l'exterieur de notre réseaux accèdent aux services Web interne en passant par l’ip du routeur 192.168.231.1 port 80 via l'interface vmnet 2. Le parefeu les redirige vers l'ip 192.168.89.2 port 80.
-* SNAT : Lorsqu'une machine souhaite accéder aux services à l'exterieur de notre réseaux, le pare-feu modifie leur adresse source par la sienne (sur l'interface extérieur) : 192.168.231.1
-
-**Connexion Tracking**
-On part du principe qu'une connexion n'est autorisé, que si elle correspond à un état prévu par notre politique (stateful firewall). On ajoute ainsi les règles suivantes : 
-
-* Une réponse SSH (sport 22) vers l'admin, n'est autorisé que si elle correspond à une connexion déjà établie
-* Une réponse HTTP (sport 80) vers l'admin,le pare-feu ou le serveur interne n'est autorisé que si elle correspond à une connexion déjà établie
-
-* Une réponse HTTP (sport 80) provenant de l'exterieur et en direction du serveur interne ou du firewalle, n'est autorisé que si elle correspond à une connexion déjà établie.
-
-**Journalisation**
-Tous les paquets correspondant à une tentative de connexion proscrite (non prévu par la politique de filtrage ou échouant aux règles connexion tracking), on va ainsi préfixer ces cas pour plus tard créer des alertes :
-
-* CT-ERR_FROM-EXTERNAL_ICMP-REP_ : 
-    - Réponse ICMP provenant de l'exterieur échouant au connexion tracking
-* CT-ERR_FROM-EXTERNAL_HTTP-REP_ :
-    - Réponse HTTP provenant de l'exterieur échouant au connexion tracking 
-* CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_ : 
-    - Réponse HTTP provenant du serveur interne vers admin échouant au connexion tracking 
-* CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_ :
-    - Réponse ICMP provenant du serveur interne vers admin échouant au connexion tracking
-* CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_ :
-    - Réponse SSH provenant du serveur interne vers admin échouant au connexion tracking
-
-* DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_ :
-    - Requête HTTP de l'exterieur vers admin
-* DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_
-    - Requête HTTP du serveur interne vers admin
-* DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_ :
-    - Requête SSH de l'exterieur vers admin
-
-* DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_ :
-    - Requête SSH de l'extérieur vers serveur interne
-* DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_
-    - Requête SSH du serveur interne vers admin
-* DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_ :
-    - Requête ICMP de l'extérieur vers admin 
-* DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_
-    - Requête ICMP de l'exterieur vers serveur interne
-* DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_
-    - Requête ICMP du serveur interne vers admin
-
-Note : Les logs du parefeu sont collectés par rsyslog. On les retrouvera dans le fichier kern.log (cela nous sera utile lorsqu'on devra les transmettre à Wazuh)
-
-
-**Règles pour l'agent Wazuh**
-Pour transmettre les logs collectés avec Rsyslog, ainsi que les alertes générées par Suricata, l'agent Wazuh installé sur le parefeu a besoin de contacter la machine admin sur le port 1514. De plus pour s'enregistré auprès de Wazuh Manager, l'agent aura besoin de contacter la machine admin sur le port 1515 (Cette règle n'est utile qu'une seule fois ).
-On ajoute les règles suivante sur le pare-feu :
-- Les connexions sortantes du parefeu sur les ports 1514 et 1515 sont autorisées
-- Les connexions entrantes sur le parefeu sur les ports 1514 et 1515 sont autorisées si elles appartiennes à une connexion déjà établie
-
-**Note technique**
-Netfilter, le pare-feu Linux fonctionnent avec 5 points d'accroches vers lesquels transite les paquets (les hooks).
-On retiendra que : 
-- Le hook prerouting est un hook de pré traitement : il contiendra les règles DNAT
-- Le hook postrouting est un hook de post traitement : il contiendra les règles SNAT
-- Les hooks input et output filtrent les connexions entrantes et sortantes (resp.) sur la machine contenant le firewall.
-- Le hook forward filtrent les connexions qui ne sont pas à destination de la machine 
-
-Aussi, les logs sont positionnés sur une chaine simple (indépendante, qui est appellée à la fin du hook forward), pour rendre la lecture plus lisible.
-
-
-Annexe 4 : nftables.conf
-
-## 5. Suricata en IDS
-Suricata est mis en place sur notre parefeu Debian, afin de détecter les attaques et tentatives d'intrusions de manière plus approfondies (détection par signatures et/ou anomalies, ).
+# 1. Présentation
 
-Suricata est configuré ainsi : 
-* Réseaux interne  = 172.16.44.0/24, 192.168.89.0/24
-* Réseaux externe = NON Réseaux interne
-* Interface d'écoute = Vmnet2 (enp2s0 du point de vue de la machine)
-* On ajoute comme source de règle d'analyse "et/open" (Emerging Threats Open), la source de référence
-* Les logs seront donc visibles depuis les fichiers :
-    - /var/log/suricata/fast.log
-    - /var/log/suricata/eve.json
+## Objectif du laboratoire
 
+La mise en place d'un environnement de laboratoire dédié à la cybersécurité permet d'expérimenter des architectures réseau réalistes, de déployer des mécanismes de protection et d'analyser le comportement d'un système face à différentes techniques d'attaque.
 
-Note : On manipulera le fichier de log "eve.json" avec la commande "jq" (Json Query)
+Ce laboratoire a pour objectif de concevoir et mettre en œuvre une architecture réseau sécurisée intégrant un pare-feu Linux, un système de détection d'intrusion réseau (IDS) ainsi qu'une solution de supervision et de corrélation des événements (SIEM).
 
+L'environnement permet notamment de :
 
-## 6. SIEM Wazuh
-**Installation**
-Wazuh est installé en single node (tous les services au même endroit) dans la machine Admin. On installera donc les 3 services : 
-* Wazuh Manager : Le serveur Wazuh pour capter les logs et alertes
-* Wazuh Indexer : La base de données Wazuh
-* Wazuh Dashboard : L'interface Web de supervision
-
-Un seul agent sera installé sur le parefeu (debian) : 
-* Wazuh agent qui transmettra à Wazuh Manager : 
-    - Les logs kernel collectés avec rsyslog (dont les logs générés avec le pare-feu)
-    - Les alertes suricata
-
-Annexe : Ajouts des paramètres à la configuration de l'agent pour récupérer logs rsyslog et alertes suricata
-
-**Configuration pour archiver les logs reçu**
-Les évènements reçu ne sont pas sauvegardé par défaut par Wazuh Manager (Wazuh server), si ceux ci ne génèrent pas une alerte.
-Note : on avait pas besoin de faire cela avec suricata, car les évènements suricata sont des alertes et son donc sauvegardés dans /var/ossec/logs/alerts/alerts.json
-
-Pour l'archivage, nous avons donc :
-- Activé logall_json (configuration du fichier /var/ossec/etc/ossec.conf) pour sauvegarder toutes les évènements dans /var/ossec/logs/alerts/archives.json, même ceux ne générant pas d'alertes
-- Préciser au collecteur des sorties de Wazuh Manager, "filebeat", d'envoyer à Wazuh Indexer les archives (configuration du fichier /etc/filebeat/filebeat.yml)
-- Crée un index pour l'archivage dans Wazuh Dashboard pour observer les logs depuis l'interface Web
-
-Ainsi, on a un visuel brut des logs directement depuis l'interface Web, ce qui facilitera la création d'alertes.
-
-**Création d'alertes personalisées**
-Les logs reçu depuis le firewall (notamment collectés par rsyslog et envoyé par l'agent) ne génèrent pas d'alertes.
-On a donc générer nos propres règles de déclanchement d'alertes en se basant sur les préfixes crées par les règles du parefeu concernant les logs (configuration du fichier /var/ossec/etc/rules/local_rules.xml).
-
-Si un des préfixe est reconnu, une alerte est générée parz Wazuh.
-
-On associera un niveau d'alerte (en suivant plus ou moins la documentation Wazuh à ce sujet)
-
-| Evènement                             | Niveau       |
-| ------------------------------------- | -----------: |
-| CT-ERR_FROM-EXTERNAL_ICMP-REP_        |        **7** |
-| CT-ERR_FROM-EXTERNAL_HTTP-REP_        |        **7** |
-| CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_    |        **7** |
-| CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_    |        **7** |
-| CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_     |        **10**|
-| DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_ |        **6** |
-| DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_  |       **10** |
-| DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_ |        **6** |
-| DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_    |        **8** |
-| DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_   |        **5** |
-| DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_      |        **6** |
-| DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_       |       **10** |
-| DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_      |        **6** |
-
-Annexe : custom_rules.xml
-
-## 7. Test et validation
-
-Les tests de validation ont étés réalisés dans le fichiers Tests_de_validation.pdf
-Le tableau ci-dessous numérote chacun de ces tests de la même manière qu'ils le sont dans le pdf (pour faciliter la lecture).
-
-Il y'a 3 tests de validation distincts :
-* Validation des journaux du pare-feu et des alertes Wazuh :
-* Validation de la détection d'intrusion par Suricata et des alertes Wazuh associées :
-* Validation des fonctionnalités réseau du pare-feu :
-
-
-Validation des journaux du pare-feu et des alertes Wazuh :
-
-| Règles                                                       | N° Test |
-| ------------------------------------------------------------ | -------:|
-
-| CT-ERR_FROM-EXTERNAL_ICMP-REP_                               |    1    |
-| CT-ERR_FROM-EXTERNAL_HTTP-REP_                               |    2    |
-| CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_                           |    3    |
-| CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_                           |    4    |
-| CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_                            |    5    |
-
-| DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_                        |    6    |
-| DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_                             |    7    |
-| DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_                         |    8    |
-| DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_                              |    9    |
-
-| DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_                        |    10   |
-| DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_                          |    11   |
-| DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_                             |    12   |
-| DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_                           |    13   |
-
-
-Validation de la détection d'intrusion par Suricata et des alertes Wazuh associées :
-
-| Règles                                                       | N° Test |
-| ------------------------------------------------------------ | -------:|
-| Suricata nmap scan detection.                                |    14   |
-| Détection Suricata avec la règle ET OPEN 210048              |    15   |
-
-
-Validation des fonctionnalités réseau du pare-feu :
-
-| Règles                                                       | N° Test |
-| ------------------------------------------------------------ | -------:|
-| DNAT : HTTP depuis Kali vers serveur Web                     |    16   |
-| SNAT : HTTP depuis serveur Web vers service Web externe      |    17   |
-| Connexion SSH de Admin vers firewall                         |    18   |
-| Connexion SSH de Admin vers serveur Web                      |    19   |
-| Connexion http de Admin vers serveur Web                     |    20   |
+* mettre en œuvre une politique de filtrage réseau ;
+* contrôler les flux entrants et sortants grâce aux mécanismes NAT ;
+* détecter des activités suspectes à l'aide d'un IDS ;
+* centraliser et analyser les événements de sécurité ;
+* reproduire des scénarios d'attaque depuis une machine externe afin de valider les mécanismes de défense.
+
+Ce projet constitue également une approche plus bas niveau de la sécurité réseau, en complément des solutions intégrées telles que pfSense utilisées dans certains projets universitaires. L'utilisation directe de Netfilter via `nftables` permet de mieux comprendre le fonctionnement interne d'un pare-feu Linux et la gestion des flux réseau.
+
+---
+
+## Machine hôte et virtualisation
+
+Le laboratoire est déployé dans un environnement virtualisé avec la configuration matérielle suivante :
+
+* Processeur : Apple Silicon M2 Pro (architecture ARM64)
+* Mémoire vive : 16 Go RAM
+* Stockage : 512 Go SSD
+
+La solution de virtualisation utilisée est **VMware Fusion**, choisie pour les raisons suivantes :
+
+* compatibilité avec macOS ;
+* disponibilité gratuite des fonctionnalités nécessaires au laboratoire ;
+* possibilité d'associer plusieurs interfaces réseau virtuelles à une même machine virtuelle, permettant de reproduire une architecture réseau segmentée.
+
+---
+
+## Technologies utilisées
+
+### Sécurité réseau
+
+* **nftables / Netfilter** : mise en œuvre du pare-feu Linux, gestion du filtrage réseau et des mécanismes NAT (SNAT/DNAT).
+* **Suricata** : système de détection d'intrusion réseau (IDS) déployé sur l'interface externe du pare-feu afin d'identifier les activités suspectes.
+* **Nmap** : outil utilisé pour réaliser des phases de reconnaissance réseau et valider la détection des scans par l'IDS.
+* **Scapy** : génération de paquets réseau personnalisés afin de tester les mécanismes de filtrage et le suivi des connexions (*connection tracking*).
+
+### Supervision et journalisation
+
+* **Wazuh** : solution SIEM utilisée pour centraliser les événements de sécurité, exploiter les alertes Suricata et analyser les journaux système du pare-feu.
+* **rsyslog** : collecte et transfert des journaux générés par le pare-feu vers la plateforme de supervision.
+* **jq** : outil permettant d'exploiter et de filtrer les fichiers JSON générés par Suricata.
+
+### Systèmes utilisés
+
+* **Kali Linux** : machine externe utilisée pour simuler des activités offensives (reconnaissance, génération de trafic réseau et tests d'intrusion).
+* **Linux Desktop** : machine d'administration utilisée pour la gestion et la supervision du laboratoire.
+* **Linux Server** : serveur hébergeant un service Web accessible depuis l'extérieur via une règle de translation d'adresse (DNAT).
+
+---
+
+## Compétences mises en œuvre
+
+Ce laboratoire a permis de mettre en pratique les compétences suivantes :
+
+* conception d'une architecture réseau sécurisée ;
+* mise en place d'une politique de filtrage réseau avec un pare-feu Linux ;
+* configuration du routage et des adressages IP statiques ;
+* déploiement de mécanismes NAT (SNAT et DNAT) ;
+* mise en place de Suricata en IDS
+* centralisation et analyse de journaux de sécurité ;
+* création de scénarios de validation permettant de vérifier l'efficacité des mécanismes de défense ;
+* exploitation du suivi des connexions (*connection tracking*) pour renforcer les règles de sécurité réseau.
+
+
+
+# 2. Architecture
+
+## Schéma réseau
+
+Annexe 1 : `schema_reseau.png`
+
+L'architecture du laboratoire repose sur une segmentation en plusieurs zones réseau afin de reproduire un environnement proche d'une infrastructure d'entreprise :
+
+* **Zone externe (WAN)** : réseau utilisé pour simuler des machines provenant d'Internet. Cette zone contient la machine Kali utilisée pour les tests offensifs.
+* **Zone serveur (DMZ)** : réseau isolé contenant le serveur Web exposé vers l'extérieur via une règle de DNAT.
+* **Zone administration** : réseau dédié à l'administration et à la supervision de l'infrastructure, contenant le serveur Wazuh.
+
+Le pare-feu Debian constitue le point central de l'architecture. Il assure :
+
+* le routage entre les différentes zones ;
+* le filtrage des communications avec `nftables` ;
+* la translation d'adresses réseau (SNAT/DNAT) ;
+* la détection des activités suspectes avec Suricata ;
+* la remontée des événements de sécurité vers Wazuh.
+
+---
+
+## Description des machines
+
+### Kali Linux
+
+Machine positionnée dans la zone externe du laboratoire.
+
+Elle est utilisée pour simuler un poste attaquant et réaliser différents scénarios de test :
+
+* reconnaissance réseau avec Nmap ;
+* analyse des services exposés ;
+* génération de trafic réseau personnalisé avec Scapy ;
+* validation des règles de filtrage du pare-feu.
+
+---
+
+### Debian Firewall
+
+Machine centrale de l'architecture assurant les fonctions de sécurité réseau.
+
+Elle assure plusieurs rôles :
+
+* routage entre les différents réseaux ;
+* filtrage réseau avec `nftables` basé sur Netfilter ;
+* gestion du NAT entrant (DNAT) et sortant (SNAT) ;
+* génération et collecte de journaux système ;
+* détection réseau avec Suricata positionné sur l'interface externe ;
+* transmission des événements de sécurité vers Wazuh via l'agent Wazuh.
+
+---
+
+### Ubuntu Desktop (Administration)
+
+Machine dédiée à l'administration et à la supervision.
+
+Elle héberge :
+
+* Wazuh en mode Single Node ;
+* les connexions SSH permettant l'administration des machines internes.
+
+---
+
+### Ubuntu Server
+
+Serveur applicatif placé dans la zone DMZ.
+
+Il héberge un service Web simple rendu accessible depuis l'extérieur via une règle de DNAT configurée sur le pare-feu.
+
+---
+
+# 3. Configuration VMware et adressage réseau
+
+## Création des réseaux virtuels
+
+Trois réseaux virtuels VMware ont été créés afin de reproduire les différentes zones de l'architecture :
+
+| Réseau VMware | Adresse réseau   | Rôle                |
+| ------------- | ---------------- | ------------------- |
+| vmnet 2       | 192.168.231.0/24 | Zone externe (WAN)  |
+| vmnet 3       | 192.168.89.0/24  | Zone serveur (DMZ)  |
+| vmnet 4       | 172.16.44.0/24   | Zone administration |
+
+---
+
+## Attribution des interfaces réseau et des adresses IP
+
+| Machine         | Interface réseau | Adresse IP      |
+| --------------- | ---------------- | --------------- |
+| Kali            | vmnet 2          | 192.168.231.100 |
+| Debian Firewall | vmnet 2          | 192.168.231.1   |
+| Debian Firewall | vmnet 3          | 192.168.89.1    |
+| Debian Firewall | vmnet 4          | 172.16.44.1     |
+| Ubuntu Desktop  | vmnet 4          | 172.16.44.2     |
+| Ubuntu Server   | vmnet 3          | 192.168.89.2    |
+
+Cette segmentation permet d'isoler les différents rôles du laboratoire et de contrôler précisément les communications entre les zones via le pare-feu Debian.
+
+---
+
+# 4. Routage
+
+## Routage du pare-feu Debian
+
+Le pare-feu Debian assure le routage inter-réseaux. Chaque réseau étant directement attaché à une interface physique virtuelle, les routes correspondantes sont automatiquement connues par le système.
+
+| Réseau destination | Interface                                         |
+| ------------------ | ------------------------------------------------- |
+| 192.168.231.0/24   | vmnet 2 (`enp2s0` du point de vue de la machine)  |
+| 192.168.89.0/24    | vmnet 3 (`enp26s0`du point de vue de la machine)  |
+| 172.16.44.0/24     | vmnet 4 (`enp3s0`du point de vue de la machine)   |
+
+---
+
+## Routage machine d'administration
+
+La machine d'administration utilise le pare-feu Debian comme passerelle pour accéder aux autres zones :
+
+| Réseau destination | Passerelle  |
+| ------------------ | ----------- |
+| 192.168.231.0/24   | 172.16.44.1 |
+| 192.168.89.0/24    | 172.16.44.1 |
+
+---
+
+## Routage serveur Web
+
+Le serveur Web utilise le pare-feu Debian comme passerelle afin de permettre les communications nécessaires avec les autres réseaux :
+
+| Réseau destination | Passerelle   |
+| ------------------ | ------------ |
+| 192.168.231.0/24   | 192.168.89.1 |
+| 172.16.44.0/24     | 192.168.89.1 |
+
+
+# 5. Déploiement du pare-feu
+
+**Annexe :** `nftables.conf`
+
+Le pare-feu Debian constitue l'élément central de l'architecture réseau. Il assure les fonctions de routage entre les différentes zones, le filtrage réseau, la traduction d'adresses (NAT), la journalisation des événements ainsi que la transmission des informations nécessaires à la supervision (logs et alertes).
+
+L'ensemble des règles de sécurité est implémenté avec **nftables**, l'outil permettant de manipuler le pare-feu Linux **Netfilter**.
+
+---
+
+## Politique de sécurité
+
+La politique de sécurité mise en place a pour objectif de garantir :
+
+* la disponibilité des services nécessaires au fonctionnement du laboratoire ;
+* l'isolation des différentes zones réseau ;
+* un accès contrôlé à l'ensemble du réseau interne depuis la machine d'administration.
+
+Le filtrage repose sur une approche restrictive : seuls les flux explicitement autorisés par la politique de sécurité sont acceptés.
+
+La politique de filtrage définie est la suivante :
+
+### Pare-feu Debian
+
+Le pare-feu doit pouvoir :
+
+* effectuer des requêtes ICMP (*ping*) vers toutes les zones, y compris l'extérieur ;
+* accéder aux services Web internes et externes.
+
+Note : Les règles concernant le connexion tracking (Http et SSH n'ont pas été mis en place sur les hook inputs relatifs au pare-feu)
+
+### Accès depuis l'extérieur
+
+Le réseau externe est considéré comme non fiable.
+
+Les machines externes peuvent :
+
+* accéder au service HTTP du serveur Web interne via l'adresse publique du pare-feu.
+
+En revanche :
+
+* les accès directs vers la zone d'administration sont interdits ;
+* les accès directs vers le serveur Web sont interdits ;
+* les accès non explicitement autorisés vers les réseaux internes sont bloqués.
+
+### Zones internes (administration et serveur)
+
+Les zones internes sont autorisées à :
+
+* effectuer des requêtes ICMP vers l'extérieur ;
+* accéder aux services Web externes sur le port 80.
+
+Ces communications ne permettent cependant pas d'autoriser des connexions entrantes depuis l'extérieur.
+
+### Machine d'administration
+
+La machine d'administration dispose de droits spécifiques afin de permettre la gestion du laboratoire.
+
+Elle est autorisée à :
+
+* établir une connexion SSH vers le pare-feu Debian ;
+* établir une connexion SSH vers le serveur interne.
+
+Les connexions SSH initiées depuis les autres zones vers la machine d'administration sont interdites.
+
+---
+
+# Translation d'adresses (NAT)
+
+Le laboratoire utilise les mécanismes de traduction d'adresses proposés par Netfilter afin de permettre l'accès aux services Web et aux communications sortantes.
+
+## DNAT
+
+Le mécanisme de **DNAT** (*Destination Network Address Translation*) permet de rendre disponible le service Web interne vers l'extérieur.
+
+Les machines externes accèdent au service HTTP en utilisant l'adresse du pare-feu `192.168.231.1:80` sur l'interface externe `vmnet2`.
+
+Le pare-feu redirige ensuite cette connexion vers le serveur Web interne `192.168.89.2:80`
+
+Ainsi, le service Web est accessible depuis l'extérieur tout en restant isolé dans son réseau interne.
+
+---
+
+## SNAT
+
+Le mécanisme de **SNAT** (*Source Network Address Translation*) permet aux machines internes d'accéder aux services externes.
+
+Lorsqu'une machine interne initie une connexion vers l'extérieur, le pare-feu modifie son adresse source par sa propre adresse sur l'interface externe `192.168.231.1`
+
+Cette modification permet aux réponses provenant de l'extérieur d'être correctement retournées vers la machine interne à l'origine de la connexion.
+
+---
+
+# Suivi des connexions (*Connection Tracking*)
+
+Le pare-feu utilise le mécanisme de **Connection Tracking** de Netfilter afin d'appliquer un filtrage à états (*stateful firewall*).
+
+Une connexion n'est considérée comme autorisée que si elle correspond à un état attendu par la politique de sécurité.
+
+Les règles suivantes sont notamment appliquées :
+
+* Une réponse SSH (`sport 22`) vers la machine d'administration est autorisée uniquement si elle correspond à une connexion déjà établie.
+
+* Une réponse HTTP (`sport 80`) vers la machine d'administration ou le serveur interne est autorisée uniquement si elle correspond à une connexion déjà établie.
+
+* Une réponse ICMP (`sport 80`) vers la machine d'administration ou le serveur interne est autorisée uniquement si elle correspond à une connexion déjà établie.
+
+Ce mécanisme permet de bloquer les paquets inattendus ou ne correspondant pas à une communication légitime.
+
+---
+
+# Journalisation
+
+Tous les paquets correspondant à une tentative de connexion interdite (flux non prévu par la politique de filtrage ou échec du *Connection Tracking*) sont journalisés.
+
+Chaque événement est associé à un préfixe spécifique afin de :
+
+* identifier rapidement l'origine et la nature du trafic ;
+* différencier un refus de politique (`DENY_*`) d'un échec du suivi de connexion (`CT-ERR_*`) ;
+* permettre la création de règles de détection personnalisées dans Wazuh.
+
+Les préfixes utilisés sont les suivants :
+
+| Préfixe                                 | Description                                                                                     |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `CT-ERR_FROM-EXTERNAL_ICMP-REP_`        | Réponse ICMP provenant de l'extérieur échouant au Connection Tracking                           |
+| `CT-ERR_FROM-EXTERNAL_HTTP-REP_`        | Réponse HTTP provenant de l'extérieur échouant au Connection Tracking                           |
+| `CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_`    | Réponse HTTP provenant du serveur interne vers l'administration échouant au Connection Tracking |
+| `CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_`    | Réponse ICMP provenant du serveur interne vers l'administration échouant au Connection Tracking |
+| `CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_`     | Réponse SSH provenant du serveur interne vers l'administration échouant au Connection Tracking  |
+| `DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_` | Requête HTTP de l'extérieur vers l'administration                                               |
+| `DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_`      | Requête HTTP du serveur interne vers l'administration                                           |
+| `DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_`  | Requête SSH de l'extérieur vers l'administration                                                |
+| `DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_`    | Requête SSH de l'extérieur vers le serveur interne                                              |
+| `DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_`       | Requête SSH du serveur interne vers l'administration                                            |
+| `DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_` | Requête ICMP de l'extérieur vers l'administration                                               |
+| `DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_`   | Requête ICMP de l'extérieur vers le serveur interne                                             |
+| `DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_`      | Requête ICMP du serveur interne vers l'administration                                           |
+
+Les journaux générés par le pare-feu sont collectés par **rsyslog** et enregistrés dans le fichier `kern.log`. Ils seront ensuite transmis à Wazuh par l'intermédiaire de l'agent installé sur le pare-feu.
+
+Ces préfixes seront également utilisés lors des tests de validation afin de vérifier le bon fonctionnement de la chaîne de détection.
+
+---
+
+# Communication avec Wazuh
+
+L'agent Wazuh installé sur le pare-feu est chargé de transmettre :
+
+* les journaux collectés par rsyslog, notamment ceux générés par nftables ;
+* les alertes générées par Suricata.
+
+Pour communiquer avec Wazuh Manager situé sur la machine d'administration, l'agent doit pouvoir contacter les ports suivants :
+
+| Port | Utilisation                                               |
+| ---- | --------------------------------------------------------- |
+| 1514 | Transmission des événements vers Wazuh Manager            |
+| 1515 | Enregistrement initial de l'agent auprès de Wazuh Manager |
+
+Les règles suivantes sont appliquées sur le pare-feu :
+
+* les connexions sortantes du pare-feu vers les ports 1514 et 1515 sont autorisées ;
+* les connexions entrantes associées à ces communications sont autorisées uniquement lorsqu'elles appartiennent à une connexion déjà établie.
+
+Note : La règle concernant le port 1515 n'est nécessaire que lors de l'enregistrement initial de l'agent.
+
+---
+
+# Note technique : architecture Netfilter
+
+Le pare-feu Linux basé sur Netfilter utilise plusieurs points d'accroche (*hooks*) traversés par les paquets lors de leur traitement.
+
+Les principaux hooks utilisés dans cette configuration sont :
+
+* **prerouting** : phase de pré-traitement des paquets avant le routage. Les règles de DNAT y sont appliquées ;
+* **postrouting** : phase de post-traitement après le routage. Les règles de SNAT y sont appliquées ;
+* **input** : filtrage des connexions destinées directement au pare-feu ;
+* **output** : filtrage des connexions initiées par le pare-feu ;
+* **forward** : filtrage des paquets traversant le pare-feu entre plusieurs réseaux.
+
+Les règles de journalisation sont regroupées dans une chaîne indépendante appelée à la fin du hook `forward` (son nom est chain_forward). Cette organisation permet de séparer la logique de filtrage de la logique de journalisation et améliore la lisibilité de la configuration.
+
+
+# 6. Déploiement de Suricata (IDS)
+
+Afin de compléter les mécanismes de protection assurés par le pare-feu, **Suricata** est déployé en tant que **système de détection d'intrusion réseau (IDS)** sur la machine Debian.
+
+Contrairement au pare-feu, qui applique une politique de filtrage, Suricata analyse le contenu des paquets transitant sur le réseau afin d'identifier des comportements suspects ou des signatures d'attaques connues. Cette approche permet d'obtenir une visibilité plus fine sur l'activité réseau et d'enrichir la supervision de sécurité.
+
+---
+
+## Positionnement dans l'architecture
+
+Suricata est configuré en mode **IDS** et écoute le trafic circulant sur l'interface externe (`enp2s0` / `vmnet2`).
+
+Ce positionnement permet d'observer les communications entre la zone externe et l'infrastructure protégée, notamment :
+
+* les scans réseau réalisés avec Nmap ;
+* les tentatives de connexion vers les services exposés ;
+* les paquets forgés générés avec Scapy ;
+* les signatures d'attaques issues des règles de détection.
+
+---
+
+## Configuration
+
+Les principaux paramètres de configuration sont les suivants :
+
+| Paramètre                       | Valeur                                             |
+| ------------------------------- | -------------------------------------------------- |
+| Réseaux internes (`HOME_NET`)   | `172.16.44.0/24`, `192.168.89.0/24`                |
+| Réseau externe (`EXTERNAL_NET`) | Tous les réseaux hors `HOME_NET`                   |
+| Interface d'écoute              | `enp2s0` du poinr de vue de la machine (`vmnet2`)  |
+| Source des règles               | **Emerging Threats Open (ET Open)**                |
+
+Les règles **Emerging Threats Open** constituent une base de signatures reconnue et régulièrement mise à jour, permettant de détecter de nombreux comportements malveillants sans avoir à développer de règles personnalisées.
+
+---
+
+## Journaux générés
+
+Suricata produit deux journaux principaux :
+
+| Fichier                      | Contenu                                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `/var/log/suricata/fast.log` | Journal texte des alertes générées.                                                                     |
+| `/var/log/suricata/eve.json` | Journal au format JSON contenant les alertes ainsi que les métadonnées associées aux événements réseau. |
+
+Le fichier `eve.json` est utilisé tout au long du laboratoire, car il fournit des informations détaillées (horodatage, adresses IP, protocole, signature, niveau de sévérité, etc.) exploitables par Wazuh.
+
+Pour faciliter l'analyse de ce fichier JSON, les requêtes sont réalisées avec l'outil **jq**, qui permet de filtrer et d'extraire rapidement les informations pertinentes.
+
+Cette journalisation constitue le point d'entrée des événements Suricata dans la chaîne de supervision mise en œuvre avec Wazuh.
+
+
+# 7. Déploiement de Wazuh (SIEM)
+
+Afin de centraliser les événements de sécurité générés par le laboratoire, le SIEM **Wazuh** est déployée sur la machine d'administration.
+
+Wazuh permet de collecter, indexer, corréler et visualiser les événements provenant du pare-feu et de Suricata. Il constitue ainsi le point central de supervision du laboratoire.
+
+---
+
+## Architecture
+
+Le laboratoire utilise une architecture **Single Node**, dans laquelle l'ensemble des composants Wazuh est installé sur une seule machine.
+
+Les services déployés sont les suivants :
+
+| Service             | Rôle                                                                                    |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| **Wazuh Manager**   | Réception des événements envoyés par les agents                                         |
+| **Wazuh Indexer**   | Stockage et indexation des événements de sécurité.                                      |
+| **Wazuh Dashboard** | Interface Web de supervision et d'analyse des événements.                               |
+
+Un **agent Wazuh** est installé sur le pare-feu Debian.
+
+Il transmet au Manager :
+
+* les journaux système collectés par **rsyslog**, notamment ceux générés par `nftables` ;
+* les alertes produites par **Suricata**.
+
+La configuration de l'agent est fournie en annexe.
+
+---
+
+## Archivage des événements
+
+Par défaut, Wazuh ne conserve pas les événements qui ne déclenchent aucune règle de détection.
+
+Afin de faciliter l'analyse et le développement de règles personnalisées, l'archivage complet des événements a été activé.
+
+Cette configuration repose sur trois étapes :
+
+1. activation de l'option `logall_json` dans `ossec.conf` afin de conserver tous les événements dans `/var/ossec/logs/archives/archives.json`
+
+2. configuration de **Filebeat** afin d'envoyer ces archives vers **Wazuh Indexer** (filebeat est un collecteur);
+
+3. création d'un index dédié dans **Wazuh Dashboard** afin de consulter les événements bruts depuis l'interface Web.
+
+Cette approche permet d'analyser les journaux avant même la création de règles de détection et facilite le développement de nouvelles alertes.
+
+Note : Les alertes Suricata ne nécessitent pas cette configuration, car elles sont déjà enregistrées automatiquement dans `alerts.json`.
+
+---
+
+## Création de règles personnalisées
+
+**Annexe :** `local_rules.xml`
+
+Les journaux générés par le pare-feu ne produisent pas d'alertes nativement dans Wazuh.
+
+Des règles personnalisées ont donc été développées dans `/var/ossec/etc/rules/local_rules.xml`
+
+Chaque règle analyse les préfixes de journalisation définis dans `nftables` (par exemple `DENY_*` ou `CT-ERR_*`) afin de transformer les événements réseau en alertes exploitables.
+
+Cette approche permet :
+
+* d'identifier rapidement les connexions interdites ;
+* de distinguer un refus de politique de sécurité d'une anomalie liée au *Connection Tracking* ;
+* d'attribuer un niveau de criticité adapté à chaque événement.
+
+---
+
+## Niveaux de sévérité
+
+Les règles personnalisées utilisent les niveaux de gravité proposés par Wazuh afin de hiérarchiser les événements détectés.
+Ci dessous les niveau d'alertes correspondant aux évènements du pare-feu (On identifie l'évènement avec le préfix ajouté par le pare-feu lors de la journalisation de ces évènements)
+
+| Événement                             | Niveau |
+| ------------------------------------- | -----: |
+| CT-ERR_FROM-EXTERNAL_ICMP-REP_        |  **7** |
+| CT-ERR_FROM-EXTERNAL_HTTP-REP_        |  **7** |
+| CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_    |  **7** |
+| CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_    |  **7** |
+| CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_     | **10** |
+| DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_ |  **6** |
+| DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_  | **10** |
+| DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_ |  **6** |
+| DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_    |  **8** |
+| DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_   |  **5** |
+| DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_      |  **6** |
+| DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_       | **10** |
+| DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_      |  **6** |
+
+Ces règles permettent d'obtenir une supervision cohérente avec la politique de sécurité mise en œuvre sur le pare-feu et facilitent l'identification des événements nécessitant une investigation.
+
+
+
+# 8. Test et validation
+
+**Annexe :** `Tests_de_validation.pdf`
+
+
+Une série de tests a été réalisée afin de valider le bon fonctionnement de l'ensemble de l'architecture mise en place.
+
+Les procédures détaillées ainsi que les résultats obtenus sont disponibles dans le document **`Tests_de_validation.pdf`**.
+
+Afin de faciliter la correspondance entre ce document et le README, chaque scénario conserve le même numéro de test dans les tableaux ci-dessous.
+
+Trois catégories de validation ont été réalisées :
+
+* validation de la journalisation du pare-feu et de la génération d'alertes Wazuh ;
+* validation de la détection d'intrusion par Suricata et de la remontée des alertes associées ;
+* validation des fonctionnalités réseau du pare-feu (NAT, accès autorisés et administration).
+
+---
+
+## Validation des journaux du pare-feu et des alertes Wazuh
+
+Ces tests permettent de vérifier la chaîne complète de supervision :
+
+**nftables → rsyslog → agent Wazuh → Wazuh Manager → alerte personnalisée**
+
+Ils valident notamment :
+
+* la génération des journaux par les règles de filtrage ;
+* la collecte des événements par rsyslog ;
+* la transmission des événements par l'agent Wazuh ;
+* le déclenchement des règles personnalisées associées aux préfixes de journalisation.
+
+| Préfixe de journalisation             | N° Test |
+| ------------------------------------- | ------: |
+| CT-ERR_FROM-EXTERNAL_ICMP-REP_        |       1 |
+| CT-ERR_FROM-EXTERNAL_HTTP-REP_        |       2 |
+| CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_    |       3 |
+| CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_    |       4 |
+| CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_     |       5 |
+| DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_ |       6 |
+| DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_      |       7 |
+| DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_  |       8 |
+| DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_       |       9 |
+| DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_ |      10 |
+| DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_   |      11 |
+| DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_      |      12 |
+| DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_    |      13 |
+
+---
+
+## Validation de la détection d'intrusion par Suricata
+
+Ces tests valident la capacité de Suricata à identifier des comportements suspects sur l'interface externe du pare-feu ainsi que la remontée des alertes associées dans Wazuh.
+
+| Scénario                                            | N° Test |
+| --------------------------------------------------- | ------: |
+| Suricata : détection d'un scan Nmap                 |      14 |
+| Suricata : déclenchement de la règle ET Open 210048 |      15 |
+
+---
+
+## Validation des fonctionnalités réseau du pare-feu
+
+Ces tests permettent de vérifier le comportement réseau attendu conformément à la politique de sécurité définie :
+
+| Fonctionnalité                                                    | N° Test |
+| ----------------------------------------------------------------- | ------: |
+| DNAT : accès HTTP depuis Kali vers le serveur Web                 |      16 |
+| SNAT : accès HTTP depuis le serveur Web vers un service externe   |      17 |
+| Connexion SSH de la machine d'administration vers le pare-feu     |      18 |
+| Connexion SSH de la machine d'administration vers le serveur Web  |      19 |
+| Connexion HTTP de la machine d'administration vers le serveur Web |      20 |
+
+L'ensemble de ces scénarios permet de confirmer le bon fonctionnement de l'architecture :
+
+* les flux autorisés sont accessibles ;
+* les flux interdits sont correctement bloqués ;
+* les événements de sécurité sont journalisés ;
+* les alertes sont générées et visibles dans Wazuh.
