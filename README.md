@@ -227,5 +227,51 @@ Annexe : custom_rules.xml
 
 ## 7. Test et validation
 
+Les tests de validation ont étés réalisés dans le fichiers Tests_de_validation.pdf
+Le tableau ci-dessous numérote chacun de ces tests de la même manière qu'ils le sont dans le pdf (pour faciliter la lecture).
+
+Il y'a 3 tests de validation distincts :
+* Validation des journaux du pare-feu et des alertes Wazuh :
+* Validation de la détection d'intrusion par Suricata et des alertes Wazuh associées :
+* Validation des fonctionnalités réseau du pare-feu :
 
 
+Validation des journaux du pare-feu et des alertes Wazuh :
+
+| Règles                                                       | N° Test |
+| ------------------------------------------------------------ | -------:|
+
+| CT-ERR_FROM-EXTERNAL_ICMP-REP_                               |    1    |
+| CT-ERR_FROM-EXTERNAL_HTTP-REP_                               |    2    |
+| CT-ERR_FROM-DMZ-TO-ADMIN_HTTP-REP_                           |    3    |
+| CT-ERR_FROM-DMZ-TO-ADMIN_ICMP-REP_                           |    4    |
+| CT-ERR_FROM-DMZ-TO-ADMIN_SSH-REP_                            |    5    |
+
+| DENY_FROM-EXTERNAL-TO-ADMIN_HTTP-REQ_                        |    6    |
+| DENY_FROM-DMZ-TO-ADMIN_HTTP-REQ_                             |    7    |
+| DENY_FROM-EXTERNAL-TO-ADMIN_SSH-REQ_                         |    8    |
+| DENY_FROM-DMZ-TO-ADMIN_SSH-REQ_                              |    9    |
+
+| DENY_FROM-EXTERNAL-TO-ADMIN_ICMP-REQ_                        |    10   |
+| DENY_FROM-EXTERNAL-TO-DMZ_ICMP-REQ_                          |    11   |
+| DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_                             |    12   |
+| DENY_FROM-EXTERNAL-TO-DMZ_SSH-REQ_                           |    13   |
+
+
+Validation de la détection d'intrusion par Suricata et des alertes Wazuh associées :
+
+| Règles                                                       | N° Test |
+| ------------------------------------------------------------ | -------:|
+| Suricata nmap scan detection.                                |    14   |
+| Détection Suricata avec la règle ET OPEN 210048              |    15   |
+
+
+Validation des fonctionnalités réseau du pare-feu :
+
+| Règles                                                       | N° Test |
+| ------------------------------------------------------------ | -------:|
+| DNAT : HTTP depuis Kali vers serveur Web                     |    16   |
+| SNAT : HTTP depuis serveur Web vers service Web externe      |    17   |
+| Connexion SSH de Admin vers firewall                         |    18   |
+| Connexion SSH de Admin vers serveur Web                      |    19   |
+| Connexion http de Admin vers serveur Web                     |    20   |
