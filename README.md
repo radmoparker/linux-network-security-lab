@@ -1,5 +1,5 @@
 # linux-network-security-lab
-## Lab SOC - Firewall Debian (nftable), Suricata et Wzuh
+## Lab SOC - Firewall Debian (nftable), Suricata et Wazuh
 
 # 1. Présentation
 
@@ -18,6 +18,10 @@ L'environnement permet notamment de :
 * reproduire des scénarios d'attaque depuis une machine externe afin de valider les mécanismes de défense.
 
 Ce projet constitue également une approche plus bas niveau de la sécurité réseau, en complément des solutions intégrées telles que pfSense utilisées dans certains projets universitaires. L'utilisation directe de Netfilter via `nftables` permet de mieux comprendre le fonctionnement interne d'un pare-feu Linux et la gestion des flux réseau.
+
+
+![Schéma réseau](images/schema_reseau.png)
+
 
 ---
 
