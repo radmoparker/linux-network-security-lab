@@ -23,6 +23,12 @@ Ce projet constitue également une approche plus bas niveau de la sécurité ré
 ![Schéma réseau](images/schema_reseau.png)
 
 
+![Wazuh Dashboard](images/wazuh-dashboard.png)
+
+
+![Wazuh agent events](images/wazuh-events.png)
+
+
 ---
 
 ## Machine hôte et virtualisation
@@ -83,7 +89,7 @@ Ce laboratoire a permis de mettre en pratique les compétences suivantes :
 
 ## Schéma réseau
 
-Annexe 1 : `schema_reseau.png`
+![Schéma réseau](images/schema_reseau.png)
 
 L'architecture du laboratoire repose sur une segmentation en plusieurs zones réseau afin de reproduire un environnement proche d'une infrastructure d'entreprise :
 
@@ -183,6 +189,8 @@ Cette segmentation permet d'isoler les différents rôles du laboratoire et de c
 
 ## Routage du pare-feu Debian
 
+![Routage pare-feu](images/routage-debian.png)
+
 Le pare-feu Debian assure le routage inter-réseaux. Chaque réseau étant directement attaché à une interface physique virtuelle, les routes correspondantes sont automatiquement connues par le système.
 
 | Réseau destination | Interface                                         |
@@ -194,6 +202,9 @@ Le pare-feu Debian assure le routage inter-réseaux. Chaque réseau étant direc
 ---
 
 ## Routage machine d'administration
+
+![Routage administrationu](images/routage-admin.png)
+
 
 La machine d'administration utilise le pare-feu Debian comme passerelle pour accéder aux autres zones :
 
@@ -232,6 +243,8 @@ La politique de sécurité mise en place a pour objectif de garantir :
 * l'isolation des différentes zones réseau ;
 * un accès contrôlé à l'ensemble du réseau interne depuis la machine d'administration.
 
+![Filtrage hook forward](images/chain-forward.png)
+
 Le filtrage repose sur une approche restrictive : seuls les flux explicitement autorisés par la politique de sécurité sont acceptés.
 
 La politique de filtrage définie est la suivante :
@@ -244,6 +257,11 @@ Le pare-feu doit pouvoir :
 * accéder aux services Web internes et externes.
 
 Note : Les règles concernant le connexion tracking (Http et SSH n'ont pas été mis en place sur les hook inputs relatifs au pare-feu)
+
+![filtrage hook input](images/chain-input.png)
+
+![filtrage hook output](images/chain-output.png)
+
 
 ### Accès depuis l'extérieur
 
@@ -287,6 +305,9 @@ Le laboratoire utilise les mécanismes de traduction d'adresses proposés par Ne
 
 ## DNAT
 
+![DNAT nftables](images/chain-prerout.png)
+
+
 Le mécanisme de **DNAT** (*Destination Network Address Translation*) permet de rendre disponible le service Web interne vers l'extérieur.
 
 Les machines externes accèdent au service HTTP en utilisant l'adresse du pare-feu `192.168.231.1:80` sur l'interface externe `vmnet2`.
@@ -298,6 +319,8 @@ Ainsi, le service Web est accessible depuis l'extérieur tout en restant isolé 
 ---
 
 ## SNAT
+
+![SNAT nftables](images/chain-postrout.png)
 
 Le mécanisme de **SNAT** (*Source Network Address Translation*) permet aux machines internes d'accéder aux services externes.
 
@@ -354,6 +377,8 @@ Les préfixes utilisés sont les suivants :
 | `DENY_FROM-DMZ-TO-ADMIN_ICMP-REQ_`      | Requête ICMP du serveur interne vers l'administration                                           |
 
 Les journaux générés par le pare-feu sont collectés par **rsyslog** et enregistrés dans le fichier `kern.log`. Ils seront ensuite transmis à Wazuh par l'intermédiaire de l'agent installé sur le pare-feu.
+
+![logs nftables](chain-logs.png)
 
 Ces préfixes seront également utilisés lors des tests de validation afin de vérifier le bon fonctionnement de la chaîne de détection.
 
@@ -412,13 +437,15 @@ Suricata est configuré en mode **IDS** et écoute le trafic circulant sur l'int
 Ce positionnement permet d'observer les communications entre la zone externe et l'infrastructure protégée, notamment :
 
 * les scans réseau réalisés avec Nmap ;
-* les tentatives de connexion vers les services exposés ;
-* les paquets forgés générés avec Scapy ;
 * les signatures d'attaques issues des règles de détection.
+* les anomalies lors de tentatives de connexion ;
 
 ---
 
 ## Configuration
+
+![Suricata running test](images/suricata-test.png)
+
 
 Les principaux paramètres de configuration sont les suivants :
 
@@ -428,6 +455,9 @@ Les principaux paramètres de configuration sont les suivants :
 | Réseau externe (`EXTERNAL_NET`) | Tous les réseaux hors `HOME_NET`                   |
 | Interface d'écoute              | `enp2s0` du poinr de vue de la machine (`vmnet2`)  |
 | Source des règles               | **Emerging Threats Open (ET Open)**                |
+
+
+![Suricata interface](images/suricata-interface.png)
 
 Les règles **Emerging Threats Open** constituent une base de signatures reconnue et régulièrement mise à jour, permettant de détecter de nombreux comportements malveillants sans avoir à développer de règles personnalisées.
 
@@ -450,6 +480,8 @@ Cette journalisation constitue le point d'entrée des événements Suricata dans
 
 
 # 7. Déploiement de Wazuh (SIEM)
+
+![Wazuh Dashboard](images/wazuh-dashboard.png)
 
 Afin de centraliser les événements de sécurité générés par le laboratoire, le SIEM **Wazuh** est déployée sur la machine d'administration.
 
@@ -509,6 +541,11 @@ Les journaux générés par le pare-feu ne produisent pas d'alertes nativement d
 Des règles personnalisées ont donc été développées dans `/var/ossec/etc/rules/local_rules.xml`
 
 Chaque règle analyse les préfixes de journalisation définis dans `nftables` (par exemple `DENY_*` ou `CT-ERR_*`) afin de transformer les événements réseau en alertes exploitables.
+
+![Wazuh agent events](images/wazuh-events.png)
+
+![Wazuh alert detail](images/wazuh-alert.png)
+
 
 Cette approche permet :
 
