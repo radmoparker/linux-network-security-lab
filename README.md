@@ -28,6 +28,8 @@ Ce projet constitue également une approche plus bas niveau de la sécurité ré
 
 ![Wazuh agent events](images/wazuh-events.png)
 
+![scapy](kali-scapy.png)
+
 
 ---
 
@@ -483,6 +485,9 @@ Cette journalisation constitue le point d'entrée des événements Suricata dans
 
 ![Wazuh Dashboard](images/wazuh-dashboard.png)
 
+![Wazuh Agent Dashboard](images/wazuh-agent-dashboard.png)
+
+
 Afin de centraliser les événements de sécurité générés par le laboratoire, le SIEM **Wazuh** est déployée sur la machine d'administration.
 
 Wazuh permet de collecter, indexer, corréler et visualiser les événements provenant du pare-feu et de Suricata. Il constitue ainsi le point central de supervision du laboratoire.
@@ -507,8 +512,6 @@ Il transmet au Manager :
 
 * les journaux système collectés par **rsyslog**, notamment ceux générés par `nftables` ;
 * les alertes produites par **Suricata**.
-
-La configuration de l'agent est fournie en annexe.
 
 ---
 
