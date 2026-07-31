@@ -60,7 +60,7 @@ La solution de virtualisation utilisée est **VMware Fusion**, choisie pour les 
 ### Supervision et journalisation
 
 * **Wazuh** : solution SIEM utilisée pour centraliser les événements de sécurité, exploiter les alertes Suricata et analyser les journaux système du pare-feu.
-* **rsyslog** : collecte et transfert des journaux générés par le pare-feu vers la plateforme de supervision.
+* **rsyslog** : collecte des journaux générés par le pare-feu
 * **jq** : outil permettant d'exploiter et de filtrer les fichiers JSON générés par Suricata.
 
 ### Systèmes utilisés
