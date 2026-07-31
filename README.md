@@ -28,7 +28,6 @@ Ce projet constitue également une approche plus bas niveau de la sécurité ré
 
 ![Wazuh agent events](images/wazuh-events.png)
 
-![scapy](kali-scapy.png)
 
 
 ---
